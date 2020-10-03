@@ -8,7 +8,7 @@ Created on Tue Jun 16 17:06:50 2020
 import ntpath
 import codecs
 import os, fnmatch
-import ss_cotton_image_tools as ss_img_tools
+from ss_cotton_2_translation_tools import ss_cotton_image_tools as ss_img_tools
 
 def mf_compose(mf_folder):
     '''
