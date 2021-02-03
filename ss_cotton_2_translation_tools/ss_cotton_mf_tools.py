@@ -19,14 +19,15 @@ def mf_compose(mf_folder):
         *.SCH       Contains the sequence in which images are loaded
         *.SAN       Unknown, could be related to animations
         *.SIF       Contains the number of image load instructions in *.SCH
-        *.SPL       Contains color palettes for images in *.PST
+        *.SPL       Contains color palettes for images in *.SPT
         *.SPT       Contains all images
-        *.SCP       Contains tile maps
+        *.SCP       Contains tiles
+        *.AIF       PCM samples
     
     Parameters
     ----------
     mf_folder : string
-        path to the folder with MF section files.
+        absolute path to the folder with MF section files.
     '''
     def find(pattern, path):
         result = []
@@ -86,14 +87,15 @@ def mf_decompose(mf_file):
         *.SCH       Contains the sequence in which images are loaded
         *.SAN       Unknown, could be related to animations
         *.SIF       Contains the number of image load instructions in *.SCH
-        *.SPL       Contains color palettes for images in *.PST
+        *.SPL       Contains color palettes for images in *.SPT
         *.SPT       Contains all images
-        *.SCP       Contains tile maps
+        *.SCP       Contains tiles
+        *.AIF       PCM samples
 
     Parameters
     ----------
     mf_file : string
-        MF file path.
+        MF file with absolute path.
 
     '''
     working_dir = ntpath.dirname(mf_file)
@@ -102,7 +104,7 @@ def mf_decompose(mf_file):
         with open(mf_file+".info", "w") as info_file:
             next_section = int.from_bytes(in_file.read(4), byteorder="big")
             
-            while next_section != 4294967295:
+            while next_section > 0 and next_section != 4294967295:
                 
                 section_start = in_file.tell() - 4
             
@@ -126,7 +128,24 @@ def mf_decompose(mf_file):
                     break
 
 def spt_gen_info(spt_file):
+    """
+    Generates meta info file for the content of the SPT file. The info file
+    contains the follwing informations for each image in the file
+        - sch identifier     symbolic name that is used in the sch info meta file
+        - file name          file name of the image in the folder
+        - plt identifer      internal identifier used by the game
+        - width              image pixel width
+        - height             image pixel height
+        - bpp                bits per pixel
+        
+    Note: The sch identifier may be changed for a better symbolic name.
 
+    Parameters
+    ----------
+    spt_file : string
+        spt file with absolute path.
+
+    """
     working_dir = ntpath.dirname(spt_file)
     
     base_name = ntpath.basename(spt_file).split(".")[0]
@@ -152,6 +171,7 @@ def spt_gen_info(spt_file):
                 width = int.from_bytes(fspt_file.read(2), byteorder="big")
                 height = int.from_bytes(fspt_file.read(2), byteorder="big")
                 size = int.from_bytes(fspt_file.read(4), byteorder="big")
+                
                 fspt_file.seek(20,1)
                 try:
                     format_str = fspt_file.read(4).decode("ascii")
@@ -180,9 +200,67 @@ def spt_gen_info(spt_file):
                 
                 ident = fspt_file.read(4)
                 cntr += 1
+                
+def txt2sch(txt_file, template):
+    """
+    Generates a template file from a text file. Template files can be used
+    to facilitate the generation of custom sch info meta files
+
+    Parameters
+    ----------
+    txt_file : string
+        text file with absolute path.
+    template : tuple
+        tuple that contains the default values for the image loading instructions.
+
+    Returns
+    -------
+    None.
+
+    """
+    working_dir = ntpath.dirname(txt_file)
+    base_name = ntpath.basename(txt_file).split(".")[0]
+    
+    lut = {',':'#comma','\n':'\\n'}
+    
+    with codecs.open(txt_file, 'r', 'utf-8') as txt_file:
+        text = txt_file.read()
+        
+    braket_start = True
+    with open(working_dir+'/'+base_name+'.sch.temp', 'w') as temp_file:
+        for char in text:
+            if char in lut:
+                char = lut[char]
+            if char == '\r':
+                continue
+            if char == '"':
+                if braket_start:
+                    char = '_"'
+                    braket_start = False
+                else:
+                    char = '"_'
+                    braket_start = True
+                    
+            for elem in template:
+                char += ','+str(elem)
+            
+            temp_file.write(char+'\n')
+        
+    
             
 def sch_compose(sch_info_file):
+    """
+    Composes the sch file from the info meta file.
     
+    Note: The first entry for each element of the meta file is the symbolic 
+    name that is used in the spt.info file.
+
+    Parameters
+    ----------
+    sch_info_file : string
+        sch.info file with absolute path.
+
+    """
     working_dir = ntpath.dirname(sch_info_file)
     base_name = ntpath.basename(sch_info_file).split(".")[0]
     spt_info_file = working_dir+"/"+base_name+".SPT.info"
@@ -260,7 +338,6 @@ def sch_compose(sch_info_file):
                 
 def sch_decompose(sch_file):
     """
-    
     The file starts with a pointer table to the entries. Each pointer is 32 bit
     long. The pointer table is terminated with 0xffffffff.
 
@@ -277,13 +354,8 @@ def sch_decompose(sch_file):
 
     Parameters
     ----------
-    sch_file : TYPE
-        DESCRIPTION.
-
-    Returns
-    -------
-    TYPE
-        DESCRIPTION.
+    sch_file : string
+         sch file with absolute path.
 
     """
     
@@ -355,7 +427,20 @@ def sch_decompose(sch_file):
                 cmd_pointer = int.from_bytes(in_file.read(4), byteorder="big")
                 
 def spt_compose(spt_info_file):
-    
+    """
+    Composes the SPT file from an info meta file. All files that are listed
+    in the meta file must be present in the same folder
+
+    Parameters
+    ----------
+    spt_info_file : string
+        spt file with absolute path.
+
+    Returns
+    -------
+    None.
+
+    """
     working_dir = ntpath.dirname(spt_info_file)
     base_name = ntpath.basename(spt_info_file).split(".")[0]
     
@@ -377,7 +462,28 @@ def spt_compose(spt_info_file):
             spt_file.write(padding)
             spt_file.write(image_data)
 
-def spt_decompose(spt_file, decode_ident=[]):
+def spt_decompose(spt_file, lz2png=False):
+    """
+    Decomposes a spt file into its image components. Known image types are
+        Type               Extension        Comment
+        tile maps          *.tlm            Tile maps without the tiles. Tiles are stored in *.SCP
+        compressed images  *.lz00           Compressed images can be decompressed with the "ss_img_tools.decode" function
+        images             *.bin            Raw binary image. Color tables are contained in the *.PLT file. 
+                                            Use "ss_img_tools.spt2png" to convert to png
+
+    Parameters
+    ----------
+    spt_file : string
+        spt file with absolute path.
+    lz2png : bool, optional
+        When true lz00 compressed images are decompressed to png. 
+        The default is False.
+
+    Returns
+    -------
+    None.
+
+    """
     
     working_dir = ntpath.dirname(spt_file)
     
@@ -406,6 +512,7 @@ def spt_decompose(spt_file, decode_ident=[]):
             leading_zeros = "0"*(4 - len(name))
             name = leading_zeros + name +"_" + base_name
             compressed = False
+            tile_map = False
             
             if format_str == "LZ00":
                 img_name = name+".lz00"
@@ -419,54 +526,66 @@ def spt_decompose(spt_file, decode_ident=[]):
                 
             bpp = int((8*uncomp_size)/(width*height))
             
+            if bpp == 0:
+                img_name = name+".tlm"
+                tile_map = True
+            
             '''
             search palette
             '''
-            img_cntr = 0
-            pimage = 0
-            plt_addr = -1
-            with open(working_dir+"/"+base_name+".SCH", "rb") as sch_file:
-                '''
-                read header
-                '''
-                pimage = int.from_bytes(sch_file.read(4), byteorder="big")
-                while pimage != 65535:
-                    sch_file.seek(pimage)
-                    
-                    sch_addr = int.from_bytes(sch_file.read(4), byteorder="big")
-                    if sch_addr == img_addr:
-                        plt_addr = int.from_bytes(sch_file.read(4), byteorder="big") >> 11
-                        break
-                    
-                    img_cntr += 1
-                    sch_file.seek(4*img_cntr, 0)
+            if not tile_map:
+                img_cntr = 0
+                pimage = 0
+                plt_addr = -1
+                with open(working_dir+"/"+base_name+".SCH", "rb") as sch_file:
+                    '''
+                    read header
+                    '''
                     pimage = int.from_bytes(sch_file.read(4), byteorder="big")
-                
-            '''
-            read palette
-            '''
-            if plt_addr > -1:
-                with open(working_dir+"/"+base_name+".SPL", "rb") as spl_file:
-                    spl_file.seek(plt_addr, 0)
-                    palette = spl_file.read(2**bpp * 2)
+                    while pimage != 65535:
+                        sch_file.seek(pimage)
+                        
+                        sch_addr = int.from_bytes(sch_file.read(4), byteorder="big")
+                        if sch_addr == img_addr:
+                            plt_addr = int.from_bytes(sch_file.read(4), byteorder="big") >> 11
+                            break
+                        
+                        img_cntr += 1
+                        sch_file.seek(4*img_cntr, 0)
+                        pimage = int.from_bytes(sch_file.read(4), byteorder="big")
                     
-            '''
-            write palette
-            '''
-            if plt_addr > -1:
-                with open(working_dir+"/"+name+".plt", "wb") as plt_file:
-                    plt_file.write(palette)
+                '''
+                read palette
+                '''
+                if plt_addr > -1:
+                    with open(working_dir+"/"+base_name+".SPL", "rb") as spl_file:
+                        spl_file.seek(plt_addr, 0)
+                        palette = spl_file.read(2**bpp * 2)
+                    
+                '''
+                write palette
+                '''
+                if plt_addr > -1:
+                    with open(working_dir+"/"+name+".plt", "wb") as plt_file:
+                        plt_file.write(palette)
             
-            '''
-            write image
-            '''
-            with open(working_dir+"/"+img_name, "wb") as image_file:
-                image_file.write(spt_file.read(size))
+                '''
+                write image
+                '''
+                with open(working_dir+"/"+img_name, "wb") as image_file:
+                    image_file.write(spt_file.read(size))
+                    
+                if lz2png:
+                    if compressed:
+                        ss_img_tools.decode(working_dir+"/"+img_name, working_dir+"/"+name+".bin")
+                    ss_img_tools.spt2png(working_dir+"/"+name+".bin", width, height, bpp)
+            else:
+                '''
+                write image
+                '''
+                with open(working_dir+"/"+img_name, "wb") as image_file:
+                    image_file.write(spt_file.read(size))
                 
-            if ident in decode_ident:
-                if compressed:
-                    ss_img_tools.decode(working_dir+"/"+img_name, working_dir+"/"+name+".bin")
-                ss_img_tools.spt2png(working_dir+"/"+name+".bin", width, height, bpp)
             
             ident = spt_file.read(4)
             cntr += 1
