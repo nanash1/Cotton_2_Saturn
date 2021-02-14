@@ -246,6 +246,39 @@ def txt2sch(txt_file, template):
             
             temp_file.write(char+'\n')
         
+def gen_font_table(temp_file):
+    
+    working_dir = ntpath.dirname(temp_file)+'/'
+    base_name = ntpath.basename(temp_file).split(".")[0]
+    
+    font_lut = {'A':'A','a':'_a','B':'B','b':'_b','C':'C','c':'_c','D':'D',
+                'd':'_d','E':'E','e':'_e','F':'F','f':'_f','G':'G','g':'_g',
+                'H':'H','h':'_h','I':'I','i':'_i','J':'J','j':'_j','K':'K',
+                'k':'_k','L':'L','l':'_l','M':'M','m':'_m','N':'N','n':'_n',
+                'O':'O','o':'_o','P':'P','p':'_p','Q':'Q','q':'_q','R':'R',
+                'r':'_r','S':'S','s':'_s','T':'T','t':'_t','U':'U','u':'_u',
+                'V':'V','v':'_v','W':'W','w':'_w','X':'X','x':'_x','Y':'Y',
+                'y':'_y','Z':'Z','z':'_z',' ':'_spc','.':'_dot',
+                '#comma':'_comma','!':'_excl','!!':'_dexcl','?':'_qm',
+                '_"':'_lqt','"_':'_rqt',"'":'_apo','..':'_ddot'}
+    
+    with open(temp_file, 'r') as ifile:
+        temp_data = ifile.read().split('\n')
+    
+    sym_list = []
+    for line in temp_data:
+        symb = line.split(',')[0]
+        if symb == '\\n':
+            continue
+        if symb not in sym_list:
+            sym_list.append(symb)
+            
+    nout = working_dir+base_name+'.SPT.temp'
+    with open(nout, 'w') as ofile:
+        for sym in sym_list:
+            if sym == '':
+                continue
+            ofile.write(sym+','+font_lut[sym]+'.bin,0,8,16,4\n')
     
             
 def sch_compose(sch_info_file):
@@ -301,7 +334,7 @@ def sch_compose(sch_info_file):
         try:
             rtn = int(command_dict[line[0]]).to_bytes(4, 'big')
         except KeyError:
-            rtn = int(command_dict["A"]).to_bytes(4, 'big')
+            rtn = int(command_dict["a"]).to_bytes(4, 'big')
         for i in range(1,9):
             rtn += int(line[i]).to_bytes(2, 'big')
         return rtn
@@ -334,7 +367,89 @@ def sch_compose(sch_info_file):
         
     with open(sch_file, 'wb') as out_file:
         out_file.write(ptable_bin)
-        out_file.write(commands_bin)  
+        out_file.write(commands_bin)
+        
+        
+def san_decompose(san_file, sch_info_file):
+    
+    working_dir = ntpath.dirname(san_file)+'/'
+    base_name = ntpath.basename(san_file).split(".")[0]
+    
+    with codecs.open(sch_info_file, 'r', 'utf-8') as fsch:
+        sch_data = fsch.read().split('\n')
+    
+    san_lst = []
+    pt_pos = 0
+    with open(san_file, 'rb') as fsan:
+        f_pos = int.from_bytes(fsan.read(4), byteorder="big")
+        while f_pos != 0xffffffff:
+            san_lst.append([])
+            pt_pos = fsan.tell()
+            fsan.seek(f_pos, 0)
+            while True:
+                img_id = int.from_bytes(fsan.read(2), byteorder="big")
+                img_id = sch_data[img_id].split(',')[0]
+                num = int.from_bytes(fsan.read(2), byteorder="big", signed=True)
+                unk = int.from_bytes(fsan.read(4), byteorder="big")
+                san_lst[-1].append((img_id, num, unk))
+                
+                if num == -1:
+                    break
+            fsan.seek(pt_pos, 0)
+            f_pos = int.from_bytes(fsan.read(4), byteorder="big")
+            
+    outfile = working_dir+base_name+'.SAN.info'
+    with open(outfile, 'w') as ofile:
+        for line in san_lst:
+            for item in line:
+                ofile.write(item[0]+','+str(item[1])+','+str(item[2]))
+                ofile.write(';')
+            ofile.seek(ofile.tell()-1,0)
+            ofile.write('\n')
+            
+def san_compose(san_info_file, sch_info_file):
+    
+    def find_item(lst, string):
+        for i in range(0, len(lst)):
+            if lst[i].find(string) > -1:
+                return i
+                
+    working_dir = ntpath.dirname(san_info_file)+'/'
+    base_name = ntpath.basename(san_info_file).split(".")[0]
+    
+    with codecs.open(sch_info_file, 'r', 'utf-8') as fsch:
+        sch_data = fsch.read().split('\n')
+
+    with open(san_info_file, 'r') as inf_file:
+        inf_data = inf_file.read()
+    inf_data = inf_data.split('\n')
+    
+    while inf_data[-1] == '':
+        inf_data.pop(-1)
+    
+    pt_table = []
+    data = bytearray()
+    empty = 0
+    
+    pos = 0
+    for line in inf_data:
+        pt_table.append(pos)
+        line = line.split(';')
+        for item in line:
+            item = item.split(',')
+            sch_idx = find_item(sch_data, item[0])
+            data += (sch_idx).to_bytes(2, 'big')
+            data += int(item[1]).to_bytes(2, 'big', signed=True)  
+            data += int(item[2]).to_bytes(4, 'big')  
+            pos += 8
+            
+    with open(working_dir+base_name+'.SAN', 'wb') as fout:
+        offset = (len(pt_table)-empty+1)*4
+        for pt in pt_table:
+            fout.write((pt+offset).to_bytes(4, 'big'))
+        fout.write((0xffffffff).to_bytes(4, 'big'))
+        fout.write(data)
+                  
                 
 def sch_decompose(sch_file):
     """
