@@ -258,9 +258,10 @@ def gen_font_table(temp_file):
                 'O':'O','o':'_o','P':'P','p':'_p','Q':'Q','q':'_q','R':'R',
                 'r':'_r','S':'S','s':'_s','T':'T','t':'_t','U':'U','u':'_u',
                 'V':'V','v':'_v','W':'W','w':'_w','X':'X','x':'_x','Y':'Y',
-                'y':'_y','Z':'Z','z':'_z',' ':'_spc','.':'_dot',
+                'y':'_y','Z':'Z','z':'_z',' ':'_spc','.':'_dot','-':'_dash',
                 '#comma':'_comma','!':'_excl','!!':'_dexcl','?':'_qm',
-                '_"':'_lqt','"_':'_rqt',"'":'_apo','..':'_ddot'}
+                '_"':'_lqt','"_':'_rqt',"'":'_apo','..':'_ddot','(':'_bral',
+                ')':'_brar'}
     
     with open(temp_file, 'r') as ifile:
         temp_data = ifile.read().split('\n')

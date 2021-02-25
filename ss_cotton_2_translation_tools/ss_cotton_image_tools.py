@@ -7,6 +7,8 @@ Created on Mon Jun 15 19:23:16 2020
 
 import ntpath
 import PIL as pil
+import numpy as np
+
 use_fallback = False
 try:
     from ss_cotton_2_translation_tools import ss_cotton_lz00
@@ -349,4 +351,107 @@ def png2spt(png_image, bpp):
                 
             
     with open(working_dir+"/"+base_name+".bin", 'wb') as out_file:
-        out_file.write(raw_image)    
+        out_file.write(raw_image)
+        
+def _str2img_space(lenght_px):
+    return np.full((16,lenght_px, 4), np.array([32, 0, 96, 255], dtype='uint8'))
+        
+def str2img(string, font_folder, out, chr_space=1, space=7):
+    
+    font_lut = {'A':'A','a':'_a','B':'B','b':'_b','C':'C','c':'_c','D':'D',
+                'd':'_d','E':'E','e':'_e','F':'F','f':'_f','G':'G','g':'_g',
+                'H':'H','h':'_h','I':'I','i':'_i','J':'J','j':'_j','K':'K',
+                'k':'_k','L':'L','l':'_l','M':'M','m':'_m','N':'N','n':'_n',
+                'O':'O','o':'_o','P':'P','p':'_p','Q':'Q','q':'_q','R':'R',
+                'r':'_r','S':'S','s':'_s','T':'T','t':'_t','U':'U','u':'_u',
+                'V':'V','v':'_v','W':'W','w':'_w','X':'X','x':'_x','Y':'Y',
+                'y':'_y','Z':'Z','z':'_z','.':'_dot','-':'_dash',
+                '#comma':'_comma','!':'_excl','!!':'_dexcl','?':'_qm',
+                '_"':'_lqt','"_':'_rqt',"'":'_apo','(':'_bral',')':'_brar',
+                '★':'_star','&':'_and'}
+    
+    cmd_lut = {'space':_str2img_space}
+    
+    bgc = np.array([32, 0, 96, 255], dtype='uint8')
+    if chr_space > 0:
+        chr_space = np.full((16,chr_space, 4), bgc)
+    if space > 0:
+        space = np.full((16,space, 4), bgc)
+    skip = 0
+    
+    lines_lst = []
+    txt_lst = []
+    for idx, char in enumerate(string):
+        if skip:
+            skip -= 1
+            continue
+        
+        if char in font_lut:
+            temp_im = pil.Image.open(font_folder+'/'+font_lut[char]+'.png')
+            temp = np.array(temp_im)
+            txt_lst.append(temp)
+            if type(chr_space) is np.ndarray:
+                txt_lst.append(chr_space)
+        elif char == ' ':
+            if txt_lst[-1] is chr_space:
+                txt_lst.pop(-1)
+            if type(space) is np.ndarray:
+                txt_lst.append(space)
+        elif char == '$':
+            spf = string.find(' ', idx)
+            spvs = string.find('<', idx)
+            spve = string.find('>', idx)
+            if spvs > -1:
+                cmd = string[idx+1:spvs]
+                cmd_arg = int(string[spvs+1:spve])
+                skip = spve - idx
+            else:
+                cmd = string[idx+1:spf]
+                cmd_arg = 0
+                skip = spf - idx
+            txt_lst.append(cmd_lut[cmd](cmd_arg))
+        elif char == '\n':
+            if txt_lst[-1] is chr_space:
+                txt_lst.pop(-1)
+            lines_lst.append(txt_lst)
+            txt_lst = []
+            
+    if txt_lst[-1] is chr_space:
+        txt_lst.pop(-1)
+    lines_lst.append(txt_lst)
+        
+    width_lst = []
+    for txt_lst in lines_lst:
+        width = 0
+        for item in txt_lst:
+            width += item.shape[1]
+        width_lst.append(width)
+        
+    max_width = max(width_lst)
+    pad = max_width % 8
+    left = 0
+    if pad > 0:
+        pad = 8-pad
+        
+        max_width += pad
+        
+        left = int(pad / 2)
+        
+        if pad % 2:
+            left += 1
+            
+    for idx, txt_lst in enumerate(lines_lst):
+        width = width_lst[idx]
+        right = max_width - (width + left)
+    
+        if left > 0:
+            txt_lst.insert(0, np.full((16,left, 4), bgc))
+        if right > 0:
+            txt_lst.append(np.full((16,right, 4), bgc))
+    
+    vert = []
+    for txt_lst in lines_lst:
+        vert.append(np.hstack(txt_lst))
+    image_im = pil.Image.fromarray(np.vstack(vert))
+    image_im.save(out)
+    

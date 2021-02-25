@@ -106,7 +106,11 @@ def update_sch_ptr_table(mf_folder):
     cfile = find("*.SCH.info", working_dir)[0]
     with codecs.open(cfile, 'r', 'utf-8') as ifile:
         lines = ifile.read().split('\n')
-        for i in range(0, len(lines)):
+        for j in range(0, len(lines)):
+            if '#starta' in lines[j]:
+                break
+        for i in range(j, len(lines)):
+            start_pts.append(i)
             if '#endz' in lines[i]:
                 break
         for j in range(i, len(lines)):
@@ -159,7 +163,11 @@ def gen_sch_ptr_table(mf_folder):
     
     with codecs.open(cfile, 'r', 'utf-8') as ifile:
         lines = ifile.read().split('\n')
-        for i in range(0, len(lines)):
+        for j in range(0, len(lines)):
+            if '#starta' in lines[j]:
+                break
+        for i in range(j, len(lines)):
+            start_pts.append(i)
             if '#endz' in lines[i]:
                 break
         for j in range(i, len(lines)):
@@ -328,9 +336,12 @@ def gen_san_ptr_table(mf_folder):
         if elem == sch_ptr:
             ptr_lst.append(pos)
             try:
+                while sch_ptr == sch_ptr_lst[0].to_bytes(2, 'big'):
+                    ptr_lst.append(pos)
+                    sch_ptr = sch_ptr_lst.pop(0).to_bytes(2, 'big')
                 sch_ptr = sch_ptr_lst.pop(0).to_bytes(2, 'big')
             except IndexError:
-                break
+                pass
         pos += 2
             
     ptr_lst = np.array(ptr_lst)
