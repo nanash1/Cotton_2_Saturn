@@ -17,7 +17,7 @@ def mf_compose(mf_folder):
     
     Known sections are:
         *.SCH       Contains the sequence in which images are loaded
-        *.SAN       Unknown, could be related to animations
+        *.SAN       Contains animation sequences
         *.SIF       Contains the number of image load instructions in *.SCH
         *.SPL       Contains color palettes for images in *.SPT
         *.SPT       Contains all images
@@ -85,7 +85,7 @@ def mf_decompose(mf_file):
     
     Known sections are:
         *.SCH       Contains the sequence in which images are loaded
-        *.SAN       Unknown, could be related to animations
+        *.SAN       Contains animation sequences
         *.SIF       Contains the number of image load instructions in *.SCH
         *.SPL       Contains color palettes for images in *.SPT
         *.SPT       Contains all images
@@ -179,16 +179,19 @@ def spt_gen_info(spt_file):
                     format_str = "0000"
                 name = num_str +"_" + base_name
                 
+                bpp = int((8*size)/(width*height))
+                
                 if format_str == "LZ00":
                     img_name = name+".lz00"
                     uncomp_size = int.from_bytes(fspt_file.read(4), byteorder="big")
+                    bpp = int((8*uncomp_size)/(width*height))
                     fspt_file.seek(-8,1)
-                else:
+                elif bpp > 0:
                     img_name = name+".bin"
-                    uncomp_size = size
                     fspt_file.seek(-4,1)
-                    
-                bpp = int((8*uncomp_size)/(width*height))
+                else:
+                    img_name = name+".tlm"
+                    fspt_file.seek(-4,1)
                     
                 '''
                 write info
@@ -247,7 +250,20 @@ def txt2sch(txt_file, template):
             temp_file.write(char+'\n')
         
 def gen_font_table(temp_file):
-    
+    """
+    Uses the template file to generate a reducted font table that contains
+    all characters used in the template.
+
+    Parameters
+    ----------
+    temp_file : string
+        Template file.
+
+    Returns
+    -------
+    None.
+
+    """
     working_dir = ntpath.dirname(temp_file)+'/'
     base_name = ntpath.basename(temp_file).split(".")[0]
     
@@ -333,11 +349,11 @@ def sch_compose(sch_info_file):
     
     def line2bin(line):
         try:
-            rtn = int(command_dict[line[0]]).to_bytes(4, 'big')
+            rtn = int(command_dict[line.pop(0)]).to_bytes(4, 'big')
         except KeyError:
             rtn = int(command_dict["a"]).to_bytes(4, 'big')
-        for i in range(1,9):
-            rtn += int(line[i]).to_bytes(2, 'big')
+        for elem in line:
+            rtn += int(elem).to_bytes(2, 'big')
         return rtn
             
     with codecs.open(sch_info_file, 'r', 'utf-8') as in_file:
@@ -347,23 +363,25 @@ def sch_compose(sch_info_file):
         '''
         line_cntr = 0
         commands_bin = bytes()
+        length_lst = []
         for line in in_file:
             
             line = line.split(",")
             line[-1] = line[-1].strip('\r\n')
             line_cntr += 1
             
-            commands_bin += line2bin(line)
+            new_command = line2bin(line)
+            length_lst.append(len(new_command))
+            commands_bin += new_command
         
         '''
         generate pointer table
         '''
         ptable_bin = bytes()
         current_pointer = (line_cntr + 1) * 4
-        while line_cntr:
+        for length in length_lst:
             ptable_bin += current_pointer.to_bytes(4, 'big')
-            current_pointer += 20
-            line_cntr -= 1
+            current_pointer += length
         ptable_bin += b'\xff\xff\xff\xff'
         
     with open(sch_file, 'wb') as out_file:
@@ -508,39 +526,50 @@ def sch_decompose(sch_file):
         for line in in_file:
             line = line.split(",")
             img_list.append(line[0])
-        
+            
     '''
     generate command list
     '''
     with codecs.open(sch_info_file, 'w', 'utf-8') as out_file:
         with open(sch_file, 'rb') as in_file:
-            '''
-            read pointer table
-            '''
-            cmd_pointer = int.from_bytes(in_file.read(4), byteorder="big")
+            sch_data = in_file.read()
+        
+        '''
+        read pointer table
+        '''   
+        ptr_lst = []
+        ptable_pos = 0
+        while True:
+            cmd_pointer = int.from_bytes(sch_data[ptable_pos:ptable_pos+4], byteorder="big")
             
-            while cmd_pointer != 4294967295:
-                ptable_pos = in_file.tell()
+            if cmd_pointer == 4294967295:
+                break
+            
+            ptr_lst.append(cmd_pointer)
+            ptable_pos += 4
+            
+        ptr_lst.append(len(sch_data))
+        
+        '''
+        read data
+        '''
+        for i in range(0, len(ptr_lst)-1):
+            pos = ptr_lst[i]
+            img_addr = int.from_bytes(sch_data[pos:pos+4], byteorder="big")
+            pos += 4
+            img_num = _spt_find_num(spt_file, img_addr)
+            cmd_ident = img_list[img_num]
+            
+            cmd_args = []
+            while pos < ptr_lst[i+1]:
+                cmd_arg = int.from_bytes(sch_data[pos:pos+2], byteorder="big")
+                pos += 2
+                cmd_args.append(cmd_arg)
                 
-                in_file.seek(cmd_pointer, 0)
-                img_addr = int.from_bytes(in_file.read(4), byteorder="big")
-                
-                img_num = _spt_find_num(spt_file, img_addr)
-                
-                cmd_ident = img_list[img_num]
-                
-                cmd_args = []
-                for i in range(0,8):
-                    cmd_arg = int.from_bytes(in_file.read(2), byteorder="big")
-                    cmd_args.append(cmd_arg)
-                    
-                line = cmd_ident
-                for cmd_arg in cmd_args:
-                    line += ","+str(cmd_arg)
-                out_file.write(line+"\n")
-                
-                in_file.seek(ptable_pos, 0)
-                cmd_pointer = int.from_bytes(in_file.read(4), byteorder="big")
+            line = cmd_ident
+            for cmd_arg in cmd_args:
+                line += ","+str(cmd_arg)
+            out_file.write(line+"\n")
                 
 def spt_compose(spt_info_file):
     """
@@ -612,7 +641,7 @@ def spt_decompose(spt_file, lz2png=False):
         while ident:
             '''
             read header
-            '''
+            ''' 
             img_addr = spt_file.tell() - 4
             ident = int.from_bytes(ident, byteorder="big")
             width = int.from_bytes(spt_file.read(2), byteorder="big")
@@ -643,64 +672,69 @@ def spt_decompose(spt_file, lz2png=False):
             bpp = int((8*uncomp_size)/(width*height))
             
             if bpp == 0:
+                bpp = 8
                 img_name = name+".tlm"
                 tile_map = True
             
             '''
             search palette
             '''
-            if not tile_map:
-                img_cntr = 0
-                pimage = 0
-                plt_addr = -1
-                with open(working_dir+"/"+base_name+".SCH", "rb") as sch_file:
-                    '''
-                    read header
-                    '''
+            img_cntr = 0
+            pimage = 0
+            plt_addr = -1
+            with open(working_dir+"/"+base_name+".SCH", "rb") as sch_file:
+                '''
+                read header
+                '''
+                pimage = int.from_bytes(sch_file.read(4), byteorder="big")
+                while pimage != 4294967295:
+                    sch_file.seek(pimage)
+                    
+                    sch_addr = int.from_bytes(sch_file.read(4), byteorder="big")
+                    if sch_addr == img_addr:
+                        plt_addr = int.from_bytes(sch_file.read(4), byteorder="big") >> 11
+                        if plt_addr > -1:
+                            plt_prev = plt_addr
+                        break
+                    
+                    img_cntr += 1
+                    sch_file.seek(4*img_cntr, 0)
                     pimage = int.from_bytes(sch_file.read(4), byteorder="big")
-                    while pimage != 65535:
-                        sch_file.seek(pimage)
+                    
+            if plt_addr == -1:
+                plt_addr = plt_prev
+                
+            '''
+            read palette
+            '''
+            if plt_addr > -1:
+                with open(working_dir+"/"+base_name+".SPL", "rb") as spl_file:
+                    spl_file.seek(plt_addr, 0)
+                    palette = spl_file.read(2**bpp * 2)
+                
+            '''
+            write palette
+            '''
+            if plt_addr > -1:
+                with open(working_dir+"/"+name+".plt", "wb") as plt_file:
+                    plt_file.write(palette)
                         
-                        sch_addr = int.from_bytes(sch_file.read(4), byteorder="big")
-                        if sch_addr == img_addr:
-                            plt_addr = int.from_bytes(sch_file.read(4), byteorder="big") >> 11
-                            break
-                        
-                        img_cntr += 1
-                        sch_file.seek(4*img_cntr, 0)
-                        pimage = int.from_bytes(sch_file.read(4), byteorder="big")
-                    
-                '''
-                read palette
-                '''
-                if plt_addr > -1:
-                    with open(working_dir+"/"+base_name+".SPL", "rb") as spl_file:
-                        spl_file.seek(plt_addr, 0)
-                        palette = spl_file.read(2**bpp * 2)
-                    
-                '''
-                write palette
-                '''
-                if plt_addr > -1:
-                    with open(working_dir+"/"+name+".plt", "wb") as plt_file:
-                        plt_file.write(palette)
-            
-                '''
-                write image
-                '''
-                with open(working_dir+"/"+img_name, "wb") as image_file:
-                    image_file.write(spt_file.read(size))
-                    
-                if lz2png:
+            '''
+            write image
+            '''
+            with open(working_dir+"/"+img_name, "wb") as image_file:
+                image_file.write(spt_file.read(size))
+                
+            if lz2png:
+                if tile_map:
+                    ss_img_tools.tlm2png(working_dir+"/"+img_name, 
+                                         working_dir+"/"+base_name+".SCP", 
+                                         working_dir+"/"+base_name+".SPL", 
+                                         width, height)
+                else:
                     if compressed:
                         ss_img_tools.decode(working_dir+"/"+img_name, working_dir+"/"+name+".bin")
                     ss_img_tools.spt2png(working_dir+"/"+name+".bin", width, height, bpp)
-            else:
-                '''
-                write image
-                '''
-                with open(working_dir+"/"+img_name, "wb") as image_file:
-                    image_file.write(spt_file.read(size))
                 
             
             ident = spt_file.read(4)

@@ -61,6 +61,114 @@ if use_fallback:
         return match
 else:
     find_best_match = ss_cotton_lz00.find_best_match
+    
+def _x_mirror_tile(tile):
+    """
+    Mirrors tiles along the x-axis.
+
+    Parameters
+    ----------
+    tile : np.ndarray
+        8x8 array.
+
+    Returns
+    -------
+    np.ndarray
+        Mirrored array.
+
+    """
+    rtn = bytearray(64)
+    for i in range(0,8):
+        start = i*8
+        rtn[start:start+8] = tile[start:start+8][::-1]
+    return bytes(rtn)
+    
+def _y_mirror_tile(tile):
+    rtn = bytearray(64)
+    for i in range(0,8):
+        rtn[i*8:(i+1)*8] = tile[(7-i)*8:(8-i)*8]
+    return bytes(rtn)
+
+def _plt2clut(plt_data, bpp):
+    """
+    Converts palette from *.plt file to RGB color lut
+
+    Parameters
+    ----------
+    plt_data : byte-like
+        Raw palette data.
+    bpp : int
+        Bit per pixel.
+
+    Returns
+    -------
+    RGB color lut.
+
+    """
+    palette_size = 2**bpp
+    rgb_clut = []
+    j = 0
+    for i in range(0,palette_size):
+    
+        rgb_clut_triplet = [0, 0, 0]
+        color = plt_data[j] >> 2
+        color = int(color * 8)
+        rgb_clut_triplet[2] = color
+        
+        color = ((plt_data[j] & 3) << 3) | (plt_data[j+1] >> 5)
+        color = int(color * 8)
+        rgb_clut_triplet[1] = color
+        
+        color =  plt_data[j+1] & 31
+        color = int(color * 8)
+        rgb_clut_triplet[0] = color
+        
+        rgb_clut.append(rgb_clut_triplet)
+        
+        j += 2
+        
+    return rgb_clut
+
+def _bin2rgb(image_bin, rgb_clut, width, height, bpp):
+    """
+    Converts binary image with indexed colors to an RGB image
+
+    Parameters
+    ----------
+    image_bin : byte-like
+        Image data as indexed colors.
+    rgb_clut : list
+        Color lut.
+    width : int
+        Image width in px.
+    height : int
+        Image height in px.
+    bpp : int
+        Bit per pixel.
+
+    Returns
+    -------
+    image_rgb : byte-like
+        Image RGB data.
+
+    """
+    image_rgb = bytes()
+    for i in range(0,int(width*height*(bpp/8))):
+        if bpp == 8:
+            index = image_bin[i]
+            image_rgb +=  rgb_clut[index][0].to_bytes(1, 'big')
+            image_rgb +=  rgb_clut[index][1].to_bytes(1, 'big')
+            image_rgb +=  rgb_clut[index][2].to_bytes(1, 'big')
+        elif bpp == 4:
+            index = (image_bin[i] & 240) >> 4
+            image_rgb +=  rgb_clut[index][0].to_bytes(1, 'big')
+            image_rgb +=  rgb_clut[index][1].to_bytes(1, 'big')
+            image_rgb +=  rgb_clut[index][2].to_bytes(1, 'big')
+            index = image_bin[i] & 15
+            image_rgb +=  rgb_clut[index][0].to_bytes(1, 'big')
+            image_rgb +=  rgb_clut[index][1].to_bytes(1, 'big')
+            image_rgb +=  rgb_clut[index][2].to_bytes(1, 'big')
+    return image_rgb
 
 def decode(file, ofile):
     """
@@ -240,6 +348,93 @@ def encode(file, ofile):
                     
         return compressed_len
     
+def tlm2png(tlm_file, scp_file, spl_file, width, height):
+    """
+    Converts tile maps to png images. Each tilemap has this structure:
+        - 1 byte control flags that are used to indicate mirrored tiles
+        - 1 byte palette idx of the tile
+        - 2 bytes index of the tile in the SCP file
+
+    Parameters
+    ----------
+    tlm_file : string
+        *.tlm tile map file.
+    scp_file : .
+        *.SCP tiles file.
+    spl_file : .
+        *.SPL palette file.
+    width : int
+        Image width in px.
+    height : int
+        Image height in px.
+
+    Returns
+    -------
+    None.
+
+    """
+    base_name = ntpath.basename(tlm_file).split(".")[0]
+    working_dir = ntpath.dirname(tlm_file)
+    
+    with open(scp_file, "rb") as ifile:
+        tile_data = ifile.read()
+        
+    tiles = []
+    for i in range(0, int(len(tile_data)/64)):
+        tiles.append(tile_data[i*64:(i+1)*64])
+    
+    tilemap = []
+    plt_lut = {}
+    with open(tlm_file, "rb") as ifile:
+        ctrl_code = ifile.read(1)
+        plt_adr = ifile.read(1)
+        tlm_idx = ifile.read(2)
+        
+        while tlm_idx:
+            ctrl_code = int().from_bytes(ctrl_code, "big")
+            plt_adr = int().from_bytes(plt_adr, "big") << 5
+            tlm_idx = int(int().from_bytes(tlm_idx, "big")/2)
+            
+            if not plt_adr in plt_lut:
+                
+                with open(spl_file, "rb") as i2_file:
+                    i2_file.seek(plt_adr, 0)
+                    plt_lut[plt_adr] = _plt2clut(i2_file.read(512), 8)
+            
+            if ctrl_code & 0x3F:
+                raise ValueError('Unknown control code')
+            
+            tilemap.append((tlm_idx, ctrl_code, plt_adr))
+
+            ctrl_code = ifile.read(1)
+            plt_adr = ifile.read(1)
+            tlm_idx = ifile.read(2)
+            
+    rgb_data = bytearray(width*height*3)
+    tlm_idx = 0
+    htiles = int(width/8)
+    vtiles = int(height/8)
+    for i in range(0, vtiles):
+        for j in range(0, htiles):
+            pos = i*192*htiles+j*24
+            tl_idx = tilemap[tlm_idx][0]
+            clut = tilemap[tlm_idx][2]
+            tile = tiles[tl_idx]
+            if tilemap[tlm_idx][1] & 0x40:
+                tile = _x_mirror_tile(tile)
+            if tilemap[tlm_idx][1] & 0x80:
+                tile = _y_mirror_tile(tile)
+                
+            tile = _bin2rgb(tile, plt_lut[clut], 8, 8, 8)
+            
+            for k in range(0,8):
+                rgb_data[pos:pos+24] = tile[k*24:(k+1)*24]
+                pos += width*3
+            tlm_idx += 1
+            
+    image = pil.Image.frombytes("RGB", (width,height), bytes(rgb_data))
+    image.save(working_dir+"/"+base_name+".png", "PNG")
+    
 def spt2png(image, width, height, bpp):     
     '''
     Converts binary images from SPT-files to png. There must be a palette file
@@ -259,53 +454,17 @@ def spt2png(image, width, height, bpp):
     '''
     base_name = ntpath.basename(image).split(".")[0]
     working_dir = ntpath.dirname(image)
-    spt_file = working_dir+"/"+base_name+".plt"
+    plt_file = working_dir+"/"+base_name+".plt"
     
-    with open(spt_file, 'rb') as in_file:
-        pallet_bin = in_file.read()
+    with open(plt_file, 'rb') as in_file:
+        plt_bin = in_file.read()
         
-    palette_size = 2**bpp
-    rgb_clut = []
-    j = 0
-    for i in range(0,palette_size):
-    
-        rgb_clut_triplet = [0, 0, 0]
-        color = pallet_bin[j] >> 2
-        color = int(color * 8)
-        rgb_clut_triplet[2] = color
-        
-        color = ((pallet_bin[j] & 3) << 3) | (pallet_bin[j+1] >> 5)
-        color = int(color * 8)
-        rgb_clut_triplet[1] = color
-        
-        color =  pallet_bin[j+1] & 31
-        color = int(color * 8)
-        rgb_clut_triplet[0] = color
-        
-        rgb_clut.append(rgb_clut_triplet)
-        
-        j += 2
+    rgb_clut = _plt2clut(plt_bin, bpp)
         
     with open(image, 'rb') as in_file:
         image_bin = in_file.read()
         
-    image_rgb = bytes()
-    
-    for i in range(0,int(width*height*(bpp/8))):
-        if bpp == 8:
-            index = image_bin[i]
-            image_rgb +=  rgb_clut[index][0].to_bytes(1, 'big')
-            image_rgb +=  rgb_clut[index][1].to_bytes(1, 'big')
-            image_rgb +=  rgb_clut[index][2].to_bytes(1, 'big')
-        elif bpp == 4:
-            index = (image_bin[i] & 240) >> 4
-            image_rgb +=  rgb_clut[index][0].to_bytes(1, 'big')
-            image_rgb +=  rgb_clut[index][1].to_bytes(1, 'big')
-            image_rgb +=  rgb_clut[index][2].to_bytes(1, 'big')
-            index = image_bin[i] & 15
-            image_rgb +=  rgb_clut[index][0].to_bytes(1, 'big')
-            image_rgb +=  rgb_clut[index][1].to_bytes(1, 'big')
-            image_rgb +=  rgb_clut[index][2].to_bytes(1, 'big')
+    image_rgb = _bin2rgb(image_bin, rgb_clut, width, height, bpp)
         
     image = pil.Image.frombytes("RGB",(width,height),image_rgb)
     image.save(working_dir+"/"+base_name+".png", "PNG")
@@ -357,7 +516,27 @@ def _str2img_space(lenght_px):
     return np.full((16,lenght_px, 4), np.array([32, 0, 96, 255], dtype='uint8'))
         
 def str2img(string, font_folder, out, chr_space=1, space=7):
-    
+    """
+    Generates an image from a string.
+
+    Parameters
+    ----------
+    string : str
+        String.
+    font_folder : str
+        Folder that contains the font bitmaps.
+    out : str
+        Output file.
+    chr_space : int, optional
+        Space in px inbetween characters. The default is 1.
+    space : int, optional
+        Space between words. The default is 7.
+
+    Returns
+    -------
+    None.
+
+    """
     font_lut = {'A':'A','a':'_a','B':'B','b':'_b','C':'C','c':'_c','D':'D',
                 'd':'_d','E':'E','e':'_e','F':'F','f':'_f','G':'G','g':'_g',
                 'H':'H','h':'_h','I':'I','i':'_i','J':'J','j':'_j','K':'K',
